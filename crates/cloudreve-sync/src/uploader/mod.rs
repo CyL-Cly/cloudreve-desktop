@@ -43,61 +43,91 @@ static DEST_POLICY_CACHE: LazyLock<Mutex<HashMap<String, (PolicyType, bool)>>> =
 ///
 /// Returns `(policy type, relay)`; `None` when the server cannot tell us, in
 /// which case the upload proceeds exactly as before.
+///
+/// `extended_info.storage_policy` only reflects the *folder's own* bound policy
+/// (`files.storage_policy_files`), which is NULL for every folder that simply
+/// inherits from its owner's group. The server picks the real upload policy
+/// with `getPreferredPolicy(ancestor)` -- the group policy of the folder owner
+/// -- so an inherited folder reports no policy at all while the upload still
+/// lands on a 139 policy. In that case we fall back to the nearest ancestor
+/// that does carry an explicit policy, and if none does, we ask the server
+/// directly by creating the session and reading back the policy it picked.
 async fn resolve_destination_policy(
     cr_client: &Arc<CrClient>,
     remote_uri: &str,
 ) -> Option<(PolicyType, bool)> {
-    let parent = CrUri::new(remote_uri)
+    let mut current = CrUri::new(remote_uri)
         .ok()
         .and_then(|uri| uri.parent().ok())
         .map(|uri| uri.to_string())
         .unwrap_or_else(|| remote_uri.to_string());
 
-    if let Ok(cache) = DEST_POLICY_CACHE.lock() {
-        if let Some(cached) = cache.get(&parent) {
-            return Some(*cached);
+    loop {
+        if let Ok(cache) = DEST_POLICY_CACHE.lock() {
+            if let Some(cached) = cache.get(&current) {
+                return Some(*cached);
+            }
         }
-    }
 
-    let info = match cr_client
-        .get_file_info(&GetFileInfoService {
-            uri: Some(parent.clone()),
-            id: None,
-            extended: Some(true),
-            folder_summary: None,
-        })
-        .await
-    {
-        Ok(info) => info,
-        Err(e) => {
-            debug!(
-                target: "uploader",
-                uri = %parent,
-                error = %e,
-                "Failed to resolve destination storage policy, assuming defaults"
-            );
-            return None;
+        let info = match cr_client
+            .get_file_info(&GetFileInfoService {
+                uri: Some(current.clone()),
+                id: None,
+                extended: Some(true),
+                folder_summary: None,
+            })
+            .await
+        {
+            Ok(info) => info,
+            Err(e) => {
+                debug!(
+                    target: "uploader",
+                    uri = %current,
+                    error = %e,
+                    "Failed to resolve destination storage policy, assuming defaults"
+                );
+                return None;
+            }
+        };
+
+        // Walk up while the ancestor leaves the policy to inheritance.
+        let policy = match info.extended_info.and_then(|e| e.storage_policy) {
+            Some(policy) => policy,
+            None => {
+                let next = CrUri::new(&current).ok().and_then(|uri| uri.parent().ok());
+                match next {
+                    Some(uri) => {
+                        let parent = uri.to_string();
+                        if parent == current {
+                            return None;
+                        }
+                        current = parent;
+                        continue;
+                    }
+                    None => return None,
+                }
+            }
+        };
+
+        let resolved = (
+            PolicyType::from_api(&policy.policy_type),
+            policy.relay.unwrap_or(false),
+        );
+
+        debug!(
+            target: "uploader",
+            uri = %current,
+            requested = %remote_uri,
+            policy_type = ?resolved.0,
+            relay = resolved.1,
+            "Resolved destination storage policy"
+        );
+
+        if let Ok(mut cache) = DEST_POLICY_CACHE.lock() {
+            cache.insert(current, resolved);
         }
-    };
-
-    let policy = info.extended_info?.storage_policy?;
-    let resolved = (
-        PolicyType::from_api(&policy.policy_type),
-        policy.relay.unwrap_or(false),
-    );
-
-    debug!(
-        target: "uploader",
-        uri = %parent,
-        policy_type = ?resolved.0,
-        relay = resolved.1,
-        "Resolved destination storage policy"
-    );
-
-    if let Ok(mut cache) = DEST_POLICY_CACHE.lock() {
-        cache.insert(parent, resolved);
+        return Some(resolved);
     }
-    Some(resolved)
 }
 
 /// Configuration for the uploader
