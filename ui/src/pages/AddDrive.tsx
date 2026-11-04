@@ -98,6 +98,7 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
   const [pageState, setPageState] = useState<PageState>(isReauthorize ? "url_input" : "url_input");
   const [localPath, setLocalPath] = useState("");
   const [folderNotEmpty, setFolderNotEmpty] = useState(false);
+  const [pathOccupied, setPathOccupied] = useState(false);
   const [driveName, setDriveName] = useState(driveNameQuery ? decodeURIComponent(driveNameQuery) : "");
   const lastFetchedUrl = useRef<string>("");
   const currentIconUrl = useRef<string | undefined>(undefined);
@@ -294,6 +295,16 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
     }
   };
 
+  // A non-empty folder is allowed, but it must not already belong to another drive.
+  const checkPathAvailable = async (path: string) => {
+    try {
+      const occupied = await invoke<boolean>('is_sync_root_occupied', { path });
+      setPathOccupied(occupied);
+    } catch {
+      setPathOccupied(false);
+    }
+  };
+
   const handleBrowseFolder = async () => {
     const selected = await openDialog({
       directory: true,
@@ -303,6 +314,7 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
     if (selected) {
       setLocalPath(selected);
       await checkDirEmpty(selected);
+      await checkPathAvailable(selected);
     }
   };
 
@@ -515,8 +527,14 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
                       onChange={(e) => {
                         setLocalPath(e.target.value);
                         setFolderNotEmpty(false);
+                        setPathOccupied(false);
                       }}
-                      onBlur={() => localPath && checkDirEmpty(localPath)}
+                      onBlur={() => {
+                        if (localPath) {
+                          checkDirEmpty(localPath);
+                          checkPathAvailable(localPath);
+                        }
+                      }}
                       variant="filled"
                       required
                       slotProps={{
@@ -534,9 +552,14 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
                         },
                       }}
                     />
-                    {folderNotEmpty && (
+                    {folderNotEmpty && !pathOccupied && (
+                      <Alert severity="info" sx={{ mt: -1 }}>
+                        {t("addDrive.folderNotEmptyInfo")}
+                      </Alert>
+                    )}
+                    {pathOccupied && (
                       <Alert severity="error" sx={{ mt: -1 }}>
-                        {t("addDrive.folderNotEmpty")}
+                        {t("addDrive.folderInUse")}
                       </Alert>
                     )}
                   </>
@@ -547,7 +570,7 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
                   variant="contained"
                   size="large"
                   fullWidth
-                  disabled={folderNotEmpty}
+                  disabled={pathOccupied}
                 >
                   {isReauthorize ? t("addDrive.reauthorizeConfirm") : t("addDrive.finish")}
                 </Button>

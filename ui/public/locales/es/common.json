@@ -17,6 +17,8 @@
     "browse": "Examinar",
     "selectFolder": "Seleccionar carpeta",
     "folderNotEmpty": "La carpeta seleccionada no está vacía. Por favor, elija una carpeta vacía.",
+    "folderNotEmptyInfo": "Esta carpeta no está vacía. Los archivos que contiene se sincronizarán con la unidad.",
+    "folderInUse": "Esta carpeta ya está siendo usada por otra unidad.",
     "finish": "Finalizar",
     "settingUp": "Configurando...",
     "successTitle": "¡Listo!",

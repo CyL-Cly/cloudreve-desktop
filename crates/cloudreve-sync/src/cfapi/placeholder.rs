@@ -29,7 +29,10 @@ use windows::{
                 CfUpdatePlaceholder,
             },
             FileSystem::{
-                CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_PINNED, FILE_ATTRIBUTE_UNPINNED, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE, FILE_SHARE_READ, FIND_FIRST_EX_FLAGS, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, OPEN_EXISTING, WIN32_FIND_DATAW
+                CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_PINNED,
+                FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_UNPINNED, FILE_FLAGS_AND_ATTRIBUTES,
+                FILE_SHARE_MODE, FILE_SHARE_READ, FIND_FIRST_EX_FLAGS, FindClose, FindExInfoBasic,
+                FindExSearchNameMatch, FindFirstFileExW, OPEN_EXISTING, WIN32_FIND_DATAW,
             },
         },
     },
@@ -638,6 +641,9 @@ impl PlaceholderState {
 pub struct LocalFileInfo {
     pub exists: bool,
     pub is_directory: bool,
+    /// Directory symlink or junction. Its children live outside the sync root, so the
+    /// reparse point itself must never be converted into a placeholder.
+    pub is_reparse_point: bool,
     pub file_size: Option<u64>,
     pub last_modified: Option<SystemTime>,
     pub placeholder_state: Option<PlaceholderState>,
@@ -649,6 +655,7 @@ impl LocalFileInfo {
         Self {
             exists: false,
             is_directory: false,
+            is_reparse_point: false,
             file_size: None,
             last_modified: None,
             placeholder_state: None,
@@ -687,6 +694,8 @@ impl LocalFileInfo {
             PinState::Unspecified
         };
         let is_directory = (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0) != 0;
+        let is_reparse_point =
+            (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0) != 0;
         let file_size = (!is_directory)
             .then_some(((find_data.nFileSizeHigh as u64) << 32) | find_data.nFileSizeLow as u64);
         let last_modified = filetime_to_system_time(find_data.ftLastWriteTime);
@@ -695,6 +704,7 @@ impl LocalFileInfo {
         Ok(Self {
             exists: true,
             is_directory,
+            is_reparse_point,
             file_size,
             last_modified,
             placeholder_state: Some(placeholder_state),

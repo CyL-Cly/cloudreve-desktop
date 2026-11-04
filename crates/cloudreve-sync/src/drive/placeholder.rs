@@ -13,6 +13,7 @@ use cloudreve_api::models::explorer::{FileResponse, file_type};
 use nt_time::FileTime;
 use std::{
     ffi::OsString,
+    os::windows::fs::MetadataExt,
     path::PathBuf,
     sync::Arc,
 };
@@ -88,9 +89,53 @@ impl CrPlaceholder {
         self
     }
 
+    /// True when this path lives below a directory symlink or junction inside
+    /// the sync root. Such entries are mirrored to the cloud, but the backing
+    /// files stay untouched: no placeholder conversion and no dehydration.
+    fn is_under_directory_link(&self) -> bool {
+        let sync_root = match self.sync_root.canonicalize() {
+            Ok(root) => root,
+            Err(_) => self.sync_root.clone(),
+        };
+        let mut current = self.local_path.parent();
+        while let Some(dir) = current {
+            if dir == self.sync_root || !dir.starts_with(&sync_root) {
+                break;
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(dir) {
+                if meta.file_type().is_symlink()
+                    || meta.file_attributes() & windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+                {
+                    return true;
+                }
+            }
+            current = dir.parent();
+        }
+        false
+    }
+
     pub fn delete_placeholder(&self, inventory: Arc<InventoryDb>) -> Result<()> {
         // Delete local file/folder if it exists
         if self.local_file_info.exists {
+            // Never recurse through a directory symlink or junction: remove_dir_all
+            // follows it and would delete the files the link points at. The same
+            // applies to anything stored below a link inside the sync root.
+            if self.local_file_info.is_reparse_point || self.is_under_directory_link() {
+                tracing::info!(
+                    target: "drive::placeholder",
+                    local_path = %self.local_path.display(),
+                    "Removing inventory entry only, link-backed file stays on disk"
+                );
+                let path_str = self
+                    .local_path
+                    .to_str()
+                    .context("failed to convert path to string")?;
+                inventory
+                    .batch_delete_by_path(vec![path_str])
+                    .context("failed to delete from inventory")?;
+                return Ok(());
+            }
+
             if self.local_path.is_dir() {
                 std::fs::remove_dir_all(&self.local_path)
                     .context("failed to delete local directory")?;
@@ -124,6 +169,22 @@ impl CrPlaceholder {
         let file_meta = self.file_meta.as_ref().unwrap();
 
         if self.local_file_info.exists {
+            // A directory symlink or junction cannot become a placeholder, and
+            // neither can anything stored below it: the backing files live
+            // outside the sync root. Record them in the inventory and leave the
+            // real files untouched.
+            if self.local_file_info.is_reparse_point || self.is_under_directory_link() {
+                tracing::info!(
+                    target: "drive::placeholder",
+                    local_path = %self.local_path.display(),
+                    "Keeping link-backed entry instead of converting it to a placeholder"
+                );
+                inventory
+                    .upsert(&MetadataEntry::from(file_meta))
+                    .context("failed to upsert inventory")?;
+                return Ok(());
+            }
+
             if !self.local_file_info.is_placeholder() {
                 let primary_entity = OsString::from(file_meta.etag.clone());
                 let blob = primary_entity.into_encoded_bytes();

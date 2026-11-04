@@ -17,6 +17,8 @@
     "browse": "Parcourir",
     "selectFolder": "Sélectionner un dossier",
     "folderNotEmpty": "Le dossier sélectionné n'est pas vide. Veuillez choisir un dossier vide.",
+    "folderNotEmptyInfo": "Ce dossier n'est pas vide. Les fichiers qu'il contient seront synchronisés vers le lecteur.",
+    "folderInUse": "Ce dossier est déjà utilisé par un autre lecteur.",
     "finish": "Terminer",
     "settingUp": "Configuration en cours...",
     "successTitle": "Terminé !",

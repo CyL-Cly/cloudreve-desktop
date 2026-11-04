@@ -415,7 +415,15 @@ impl<'a> UploadTask<'a> {
             self.local_file
                 .take()
                 .unwrap()
-                .with_mark_no_children(file.file_type == file_type::FOLDER)
+                .with_mark_no_children(
+                    file.file_type == file_type::FOLDER
+                        && !self
+                            .local_file
+                            .as_ref()
+                            .unwrap()
+                            .local_file_info
+                            .is_reparse_point,
+                )
                 .with_remote_file(file),
         );
 

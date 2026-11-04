@@ -17,6 +17,8 @@
     "browse": "浏览",
     "selectFolder": "选择文件夹",
     "folderNotEmpty": "所选文件夹不为空，请选择一个空文件夹。",
+    "folderNotEmptyInfo": "该文件夹不为空，其中的文件会同步到网盘。",
+    "folderInUse": "该文件夹已被其他网盘占用，请选择其他位置。",
     "finish": "完成",
     "settingUp": "正在配置中...",
     "successTitle": "设置完成！",

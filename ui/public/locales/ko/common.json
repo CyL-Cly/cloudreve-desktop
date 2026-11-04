@@ -17,6 +17,8 @@
     "browse": "찾아보기",
     "selectFolder": "폴더 선택",
     "folderNotEmpty": "선택한 폴더가 비어 있지 않습니다. 빈 폴더를 선택해 주세요.",
+    "folderNotEmptyInfo": "이 폴더는 비어 있지 않습니다. 안의 파일이 드라이브에 동기화됩니다.",
+    "folderInUse": "이 폴더는 이미 다른 드라이브에서 사용 중입니다.",
     "finish": "완료",
     "settingUp": "설정 중...",
     "successTitle": "설정 완료!",

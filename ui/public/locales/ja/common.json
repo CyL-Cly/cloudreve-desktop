@@ -17,6 +17,8 @@
     "browse": "参照",
     "selectFolder": "フォルダを選択",
     "folderNotEmpty": "選択したフォルダは空ではありません。空のフォルダを選択してください。",
+    "folderNotEmptyInfo": "このフォルダは空ではありません。中のファイルはドライブに同期されます。",
+    "folderInUse": "このフォルダは既に別のドライブで使用されています。",
     "finish": "完了",
     "settingUp": "設定中...",
     "successTitle": "設定完了！",

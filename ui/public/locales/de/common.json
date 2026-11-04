@@ -17,6 +17,8 @@
     "browse": "Durchsuchen",
     "selectFolder": "Ordner auswählen",
     "folderNotEmpty": "Der ausgewählte Ordner ist nicht leer. Bitte wählen Sie einen leeren Ordner.",
+    "folderNotEmptyInfo": "Dieser Ordner ist nicht leer. Die enthaltenen Dateien werden in das Laufwerk synchronisiert.",
+    "folderInUse": "Dieser Ordner wird bereits von einem anderen Laufwerk verwendet.",
     "finish": "Fertig",
     "settingUp": "Einrichtung läuft...",
     "successTitle": "Fertig!",

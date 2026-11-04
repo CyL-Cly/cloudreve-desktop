@@ -946,6 +946,31 @@ impl Mount {
                 .enqueue(payload)
                 .await
                 .context("Failed to enqueue upload task")?;
+
+            // A directory link is uploaded as an empty folder. Its children live
+            // outside the sync root, so queue a full sync of the link to upload them.
+            let is_directory_link = LocalFileInfo::from_path(&path)
+                .map(|info| info.is_directory && info.is_reparse_point)
+                .unwrap_or(false);
+            if is_directory_link {
+                tracing::info!(
+                    target: "drive::commands",
+                    path = %path.display(),
+                    "Syncing contents of a newly created directory link"
+                );
+                if let Err(e) = self.command_tx.send(MountCommand::Sync {
+                    local_paths: vec![path.clone()],
+                    mode: SyncMode::FullHierarchy,
+                    user_initiated: false,
+                }) {
+                    tracing::error!(
+                        target: "drive::commands",
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to queue sync for directory link"
+                    );
+                }
+            }
         }
 
         Ok(())

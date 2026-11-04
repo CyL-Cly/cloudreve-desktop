@@ -52,10 +52,41 @@ pub async fn is_dir_empty(path: String) -> CommandResult<bool> {
     if !p.exists() || !p.is_dir() {
         return Ok(true);
     }
+    // Directory symlinks and junctions only mirror another folder. They carry no
+    // data of their own, so a folder that contains nothing else can still be bound.
     match std::fs::read_dir(p) {
-        Ok(mut entries) => Ok(entries.next().is_none()),
+        Ok(entries) => Ok(!entries.flatten().any(|entry| {
+            !entry
+                .file_type()
+                .map(|kind| kind.is_symlink())
+                .unwrap_or(false)
+        })),
         Err(_) => Ok(true),
     }
+}
+
+/// Check whether another drive already uses this directory or one of its
+/// parents as its sync root. Binding such a path would put one drive's files
+/// inside the other's placeholder tree.
+#[tauri::command]
+pub async fn is_sync_root_occupied(
+    state: State<'_, AppStateHandle>,
+    path: String,
+) -> CommandResult<bool> {
+    let app_state = state
+        .get()
+        .ok_or_else(|| "App not yet initialized".to_string())?;
+    let candidate = std::path::PathBuf::from(&path);
+    let candidate = candidate.canonicalize().unwrap_or(candidate);
+
+    for drive in app_state.drive_manager.list_drives().await {
+        let existing = drive.sync_path.clone();
+        let existing = existing.canonicalize().unwrap_or(existing);
+        if candidate.starts_with(&existing) || existing.starts_with(&candidate) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// List all configured drives
@@ -92,8 +123,22 @@ pub async fn add_drive(
         .ok_or_else(|| "App not yet initialized".to_string())?;
 
     // Validate local_path for new drives (not for reauthorization)
-    if config.drive_id.is_none() && is_root_drive(&config.local_path) {
-        return Err(t!("localPathCannotBeRootDrive").to_string());
+    if config.drive_id.is_none() {
+        if is_root_drive(&config.local_path) {
+            return Err(t!("localPathCannotBeRootDrive").to_string());
+        }
+        // A non-empty folder is allowed, but it must not already belong to
+        // another drive, otherwise two placeholder trees would overlap.
+        let candidate = std::path::PathBuf::from(&config.local_path);
+        let candidate = candidate.canonicalize().unwrap_or(candidate);
+        let path_str = config.local_path.clone();
+        for drive in app_state.drive_manager.list_drives().await {
+            let existing = drive.sync_path.clone();
+            let existing = existing.canonicalize().unwrap_or(existing);
+            if candidate.starts_with(&existing) || existing.starts_with(&candidate) {
+                return Err(t!("localPathInUse", "path" => path_str).to_string());
+            }
+        }
     }
 
     // Convert relative expiry times (seconds) to absolute RFC3339 timestamps

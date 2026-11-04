@@ -17,6 +17,8 @@
     "browse": "Browse",
     "selectFolder": "Select Folder",
     "folderNotEmpty": "The selected folder is not empty. Please choose an empty folder.",
+    "folderNotEmptyInfo": "This folder is not empty. Files inside will be synced into the drive.",
+    "folderInUse": "This folder is already used by another drive.",
     "finish": "Finish",
     "settingUp": "We're setting things up...",
     "successTitle": "You're all set!",

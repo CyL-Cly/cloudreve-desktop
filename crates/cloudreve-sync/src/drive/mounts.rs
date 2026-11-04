@@ -465,11 +465,42 @@ impl Mount {
         )?;
 
         tracing::info!(target: "drive::mounts", id = %self.id, "Watching FS");
-        debouncer.watch(
-            &self.config.read().await.sync_path,
-            RecursiveMode::Recursive,
-        )?;
+        let sync_path = self.config.read().await.sync_path.clone();
+        debouncer.watch(&sync_path, RecursiveMode::Recursive)?;
         *self.fs_watcher.lock().await = Some(debouncer);
+
+        // A directory link was created before this mount started, so no create
+        // event will ever arrive for it. Queue an upload-only sync so the files
+        // behind the link reach the cloud.
+        let command_tx = self.command_tx.clone();
+        let mount_id = self.id.clone();
+        let link_sync_root = sync_path.clone();
+        tokio::spawn(async move {
+            // Let the command processor start before dispatching.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let links = crate::drive::sync::list_directory_links(&link_sync_root);
+            for link in links {
+                tracing::info!(
+                    target: "drive::mounts",
+                    id = %mount_id,
+                    path = %link.display(),
+                    "Queueing upload-only sync for directory link"
+                );
+                if let Err(e) = command_tx.send(MountCommand::Sync {
+                    local_paths: vec![link],
+                    mode: crate::drive::sync::SyncMode::FullHierarchy,
+                    user_initiated: false,
+                }) {
+                    tracing::error!(
+                        target: "drive::mounts",
+                        id = %mount_id,
+                        error = %e,
+                        "Failed to queue sync for directory link"
+                    );
+                }
+            }
+        });
+
         Ok(())
     }
 

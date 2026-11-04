@@ -17,6 +17,8 @@
     "browse": "Sfoglia",
     "selectFolder": "Seleziona cartella",
     "folderNotEmpty": "La cartella selezionata non è vuota. Seleziona una cartella vuota.",
+    "folderNotEmptyInfo": "Questa cartella non è vuota. I file al suo interno verranno sincronizzati con l'unità.",
+    "folderInUse": "Questa cartella è già usata da un'altra unità.",
     "finish": "Fine",
     "settingUp": "Configurazione in corso...",
     "successTitle": "Fatto!",

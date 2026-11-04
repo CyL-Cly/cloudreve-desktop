@@ -17,6 +17,8 @@
     "browse": "瀏覽",
     "selectFolder": "選擇資料夾",
     "folderNotEmpty": "所選資料夾不為空，請選擇一個空資料夾。",
+    "folderNotEmptyInfo": "該資料夾不為空，其中的檔案會同步到網盤。",
+    "folderInUse": "該資料夾已被其他網盤佔用，請選擇其他位置。",
     "finish": "完成",
     "settingUp": "正在設定中...",
     "successTitle": "設定完成！",

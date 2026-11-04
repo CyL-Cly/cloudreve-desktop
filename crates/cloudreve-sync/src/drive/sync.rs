@@ -35,6 +35,7 @@ use std::{
     path::{Path, PathBuf},
     time::SystemTime,
 };
+
 use tokio::task;
 use uuid::Uuid;
 
@@ -124,6 +125,34 @@ pub fn is_symbolic_link(file: &FileResponse) -> bool {
 }
 
 pub type GroupedFsEvents = HashMap<EventKind, Vec<Event>>;
+
+/// Directory symlinks and junctions sitting directly in `directory`, keeping the
+/// link path rather than the resolved target.
+pub fn list_directory_links(directory: &Path) -> Vec<PathBuf> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(err) => {
+            tracing::warn!(
+                target: "drive::sync",
+                path = %directory.display(),
+                error = %err,
+                "Failed to scan directory for links"
+            );
+            return Vec::new();
+        }
+    };
+
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|kind| kind.is_symlink())
+                .unwrap_or(false)
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
 
 const REMOTE_PAGE_SIZE: i32 = 1000;
 
@@ -954,6 +983,21 @@ impl Mount {
         inventory: Option<&FileMetadata>,
         plan: &mut SyncPlan,
     ) {
+        // A directory symlink or junction points at data that physically lives
+        // outside the sync root. Placeholders can only exist under the sync root,
+        // so the link itself is never converted; its children are uploaded by
+        // walking the link path and reading through the reparse point.
+        if local.exists && local.is_directory && local.is_reparse_point {
+            tracing::debug!(
+                target: "drive::sync",
+                id = %self.id,
+                path = %path.display(),
+                "Handling directory link as upload-only"
+            );
+            self.plan_directory_link(path, mode, remote, local, plan);
+            return;
+        }
+
         match (remote, local.exists) {
             (Some(remote_entry), true) => self.plan_entry_with_remote_and_local(
                 path,
@@ -1041,8 +1085,40 @@ impl Mount {
         }
     }
 
-    fn plan_entry_with_local_only(
+    /// Plan actions for a directory symlink or junction inside the sync root.
+    ///
+    /// The linked folder lives outside the sync root, so nothing under it may
+    /// become a placeholder. The link is mirrored to the cloud as a real folder
+    /// and its contents are uploaded; local deletions are never propagated.
+    fn plan_directory_link(
         &self,
+        path: &PathBuf,
+        mode: SyncMode,
+        remote: Option<&FileResponse>,
+        _local: &LocalFileInfo,
+        plan: &mut SyncPlan,
+    ) {
+        // Creating the remote folder is idempotent, so it is safe even when the
+        // folder already exists remotely.
+        plan.actions.push(SyncAction::CreateRemoteFolderIfExist {
+            path: path.clone(),
+        });
+
+        let child_mode = match remote {
+            Some(entry) if entry.file_type == file_type::FOLDER => next_child_mode(mode),
+            _ => SyncMode::FullHierarchy,
+        };
+
+        self.insert_walk_request(
+            path.clone(),
+            child_mode,
+            WalkReason::ModePropagation,
+            WalkTiming::Immediate,
+            plan,
+        );
+    }
+
+    fn plan_entry_with_local_only(        &self,
         path: &PathBuf,
         mode: SyncMode,
         local: &LocalFileInfo,
