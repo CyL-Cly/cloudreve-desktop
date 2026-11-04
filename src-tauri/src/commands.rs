@@ -433,11 +433,11 @@ fn show_drive_window_internal(app: &AppHandle, title: &str, url_path: &str) {
     }
 
     // Create new window with mica effect
+    // NOTE: spread the defaults so the struct keeps compiling when newer
+    // tauri-utils releases add fields (e.g. `interactive`).
     let effects = WindowEffectsConfig {
         effects: vec![WindowEffect::Mica, WindowEffect::Acrylic],
-        state: None,
-        radius: None,
-        color: None,
+        ..Default::default()
     };
 
     let builder = WebviewWindowBuilder::new(app, "add-drive", WebviewUrl::App(url_path.into()))
