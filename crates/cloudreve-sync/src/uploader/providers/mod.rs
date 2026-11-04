@@ -5,6 +5,9 @@ mod onedrive;
 mod qiniu;
 mod s3;
 mod upyun;
+mod yun139;
+
+pub use yun139::{prepare_upload_extras, UploadExtras};
 
 use crate::uploader::chunk::ChunkInfo;
 use crate::uploader::session::UploadSession;
@@ -41,6 +44,8 @@ pub enum PolicyType {
     Ks3,
     /// Huawei Cloud OBS
     Obs,
+    /// China Mobile Cloud (139)
+    Yun139,
 }
 
 impl PolicyType {
@@ -57,6 +62,7 @@ impl PolicyType {
             ApiPolicyType::S3 => PolicyType::S3,
             ApiPolicyType::Ks3 => PolicyType::Ks3,
             ApiPolicyType::Obs => PolicyType::Obs,
+            ApiPolicyType::Yun139 => PolicyType::Yun139,
             ApiPolicyType::LoadBalance => PolicyType::Local, // Fallback
         }
     }
@@ -74,6 +80,7 @@ impl PolicyType {
             "s3" => PolicyType::S3,
             "ks3" => PolicyType::Ks3,
             "obs" => PolicyType::Obs,
+            "yun139" => PolicyType::Yun139,
             _ => PolicyType::Local,
         }
     }
@@ -91,6 +98,7 @@ impl PolicyType {
             PolicyType::S3 => "s3",
             PolicyType::Ks3 => "ks3",
             PolicyType::Obs => "obs",
+            PolicyType::Yun139 => "yun139",
         }
     }
 
@@ -106,13 +114,17 @@ impl PolicyType {
     pub fn requires_callback(&self) -> bool {
         matches!(
             self,
-            PolicyType::S3 | PolicyType::Ks3 | PolicyType::Cos | PolicyType::OneDrive
+            PolicyType::S3
+                | PolicyType::Ks3
+                | PolicyType::Cos
+                | PolicyType::OneDrive
+                | PolicyType::Yun139
         )
     }
 
     /// Check if this provider uses per-chunk URLs
     pub fn uses_per_chunk_urls(&self) -> bool {
-        self.is_s3_like()
+        self.is_s3_like() || matches!(self, PolicyType::Yun139)
     }
 }
 
@@ -143,6 +155,10 @@ where
         }
         PolicyType::Qiniu => qiniu::upload_chunk_generic(http_client, chunk, stream, session).await,
         PolicyType::Upyun => upyun::upload_chunk_generic(http_client, chunk, stream, session).await,
+        // 139 cloud exposes presigned per-part URLs like S3
+        PolicyType::Yun139 => {
+            yun139::upload_chunk_generic(http_client, chunk, stream, session).await
+        }
     }
 }
 
@@ -179,6 +195,8 @@ pub async fn complete_upload(
         PolicyType::Obs => s3::complete_upload_obs(http_client, session).await,
         PolicyType::OneDrive => onedrive::complete_upload(cr_client, session).await,
         PolicyType::Qiniu => qiniu::complete_upload(http_client, session).await,
+        // 139 assembles the object server-side, triggered by the Cloudreve callback
+        PolicyType::Yun139 => yun139::complete_upload(cr_client, session).await,
         PolicyType::Upyun => {
             // Sleep 10s for a callback
             tokio::time::sleep(Duration::from_secs(10)).await;

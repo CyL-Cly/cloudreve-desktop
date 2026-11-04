@@ -10,20 +10,95 @@ mod progress;
 mod providers;
 mod session;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 pub use chunk::{ChunkProgress, ChunkUploader};
 pub use error::{UploadError, UploadResult};
 pub use progress::{ProgressCallback, ProgressUpdate};
 pub use session::UploadSession;
 
 use crate::inventory::InventoryDb;
+use crate::uploader::providers::PolicyType;
+use cloudreve_api::models::explorer::GetFileInfoService;
+use cloudreve_api::models::uri::CrUri;
 use cloudreve_api::{Client as CrClient, api::ExplorerApi};
 use reqwest::Client as HttpClient;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+
+/// Destination storage policy cache, keyed by the remote parent folder URI.
+///
+/// The 139 cloud driver requires the whole-file digest at session creation, so
+/// the *target* policy has to be known before the session exists. Files inherit
+/// their folder's storage policy, so one lookup per folder is enough. Entries
+/// are never invalidated: a stale entry can only cost an unnecessary hash pass
+/// (harmless) or be caught by the server when the policy requires hashes.
+static DEST_POLICY_CACHE: LazyLock<Mutex<HashMap<String, (PolicyType, bool)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Resolve the storage policy that a new file under `remote_uri` will use.
+///
+/// Returns `(policy type, relay)`; `None` when the server cannot tell us, in
+/// which case the upload proceeds exactly as before.
+async fn resolve_destination_policy(
+    cr_client: &Arc<CrClient>,
+    remote_uri: &str,
+) -> Option<(PolicyType, bool)> {
+    let parent = CrUri::new(remote_uri)
+        .ok()
+        .and_then(|uri| uri.parent().ok())
+        .map(|uri| uri.to_string())
+        .unwrap_or_else(|| remote_uri.to_string());
+
+    if let Ok(cache) = DEST_POLICY_CACHE.lock() {
+        if let Some(cached) = cache.get(&parent) {
+            return Some(*cached);
+        }
+    }
+
+    let info = match cr_client
+        .get_file_info(&GetFileInfoService {
+            uri: Some(parent.clone()),
+            id: None,
+            extended: Some(true),
+            folder_summary: None,
+        })
+        .await
+    {
+        Ok(info) => info,
+        Err(e) => {
+            debug!(
+                target: "uploader",
+                uri = %parent,
+                error = %e,
+                "Failed to resolve destination storage policy, assuming defaults"
+            );
+            return None;
+        }
+    };
+
+    let policy = info.extended_info?.storage_policy?;
+    let resolved = (
+        PolicyType::from_api(&policy.policy_type),
+        policy.relay.unwrap_or(false),
+    );
+
+    debug!(
+        target: "uploader",
+        uri = %parent,
+        policy_type = ?resolved.0,
+        relay = resolved.1,
+        "Resolved destination storage policy"
+    );
+
+    if let Ok(mut cache) = DEST_POLICY_CACHE.lock() {
+        cache.insert(parent, resolved);
+    }
+    Some(resolved)
+}
 
 /// Configuration for the uploader
 #[derive(Debug, Clone)]
@@ -266,6 +341,21 @@ impl Uploader {
     async fn create_session(&self, params: &UploadParams) -> Result<UploadSession> {
         use cloudreve_api::models::explorer::UploadSessionRequest;
 
+        // Policies that must receive the whole-file digest up front (139 cloud)
+        // need the hashes computed before the session exists.
+        let mut yun139_extras: Option<providers::UploadExtras> = None;
+        if let Some((policy_type, relay)) =
+            resolve_destination_policy(&self.cr_client, &params.remote_uri).await
+        {
+            if policy_type == PolicyType::Yun139 && !relay {
+                yun139_extras = Some(
+                    providers::prepare_upload_extras(params.local_path.clone(), params.file_size)
+                        .await
+                        .context("failed to compute 139 cloud content hash")?,
+                );
+            }
+        }
+
         let request = UploadSessionRequest {
             uri: params.remote_uri.clone(),
             size: params.file_size as i64,
@@ -286,6 +376,9 @@ impl Uploader {
             encryption_supported: Some(vec![
                 cloudreve_api::models::explorer::EncryptionCipher::Aes256Ctr,
             ]),
+            content_hash: yun139_extras.as_ref().map(|e| e.content_hash.clone()),
+            chunk_size: yun139_extras.as_ref().map(|e| e.chunk_size as i64),
+            part_hashes: yun139_extras.as_ref().map(|e| e.part_hashes.clone()),
         };
 
         let credential = self
@@ -293,6 +386,24 @@ impl Uploader {
             .create_upload_session(&request)
             .await
             .context("failed to create upload session")?;
+
+        // The part boundaries are baked into `part_hashes`, so a different chunk
+        // size from the server would silently corrupt the upload.
+        if let Some(extras) = &yun139_extras {
+            if credential.chunk_size as u64 != extras.chunk_size {
+                bail!(
+                    "139 cloud accepted chunk_size {} but the hash states were built for {}",
+                    credential.chunk_size,
+                    extras.chunk_size
+                );
+            }
+            if credential.encrypt_metadata.is_some() {
+                bail!(
+                    "139 cloud direct upload does not support client side encryption, \
+                     disable encryption on the storage policy"
+                );
+            }
+        }
 
         debug!(
             target: "uploader",

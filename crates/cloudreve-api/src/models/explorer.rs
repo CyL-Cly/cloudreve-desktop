@@ -166,6 +166,8 @@ pub enum PolicyType {
     S3,
     Ks3,
     Obs,
+    /// 中国移动云盘 (139)
+    Yun139,
     #[serde(rename = "load_balance")]
     LoadBalance,
 }
@@ -484,6 +486,17 @@ pub struct UploadSessionRequest {
     pub encryption_supported: Option<Vec<EncryptionCipher>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
+    /// 全文件 SHA-256（小写 hex）。仅"创建会话时就必须提交摘要"的策略
+    /// （如中国移动云盘）需要；缺省时这类策略会拒绝创建会话。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// 计算 `part_hashes` 时采用的分片大小，必须是 64 的整数倍。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_size: Option<i64>,
+    /// 各分片前缀的 SHA-256 链式状态，第 i 个元素对应第 i+2 个分片的
+    /// `parallelHashCtx`，长度应为 ceil(size/chunk_size)-1。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_hashes: Option<Vec<[u32; 8]>>,
 }
 
 /// Metadata key constants
